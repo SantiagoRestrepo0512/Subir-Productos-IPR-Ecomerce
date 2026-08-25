@@ -7,13 +7,22 @@ app = Flask(__name__)
 # Función para encontrar automáticamente el archivo CSV dentro de la carpeta api/
 def get_csv_path():
     base_dir = os.path.dirname(__file__)
-    # Busca cualquier archivo .csv en la carpeta api/
     csv_files = glob.glob(os.path.join(base_dir, "*.csv"))
     if csv_files:
         return csv_files[0]
     return None
 
 BTU_SET = {9000, 12000, 18000, 24000, 30000, 36000, 42000, 48000, 50000, 60000}
+
+LISTA_MARCAS_CONOCIDAS = [
+    "MIDEA", "SAMSUNG", "LG", "CARRIER", "TRANE", "YORK", "DAIKIN", 
+    "COPELAND", "DANFOSS", "EMERSON", "PANASONIC", "GREE", "HACEB", 
+    "HISENSE", "ELECTROLUX", "GENERAL ELECTRIC", "HONEYWELL", "MABE",
+    "BOSCH", "WESTINGHOUSE", "WHITE RODGERS", "ELGIN", "EMBRACO",
+    "TECUMSEH", "FULL GAUGE", "DIXELL", "SOLER Y PALAU", "ROWA",
+    "ASPEN", "ELITECH", "DORIN", "MCQUAY", "DUPONT", "CHEMOURS",
+    "3M", "LOCTITE", "TYCO", "WEG", "CHEVRON"
+]
 
 MARCAS_ML = {
     "BOSCH": "BOSCH", "CARRIER": "CARRIER", "CHEVRON": "CHEVRON", "COPELAND": "COPELAND",
@@ -261,19 +270,23 @@ def extract_desc(block):
     return re.sub(r'^[^\w]+', '', text).strip()
 
 def extract_marca_raw(block):
-    m = re.search(r'producto/[^,]*,\\s*([^,]+),', block)
-    if m and m.group(1).strip().lower() not in ('1','0','none',''):
+    m = re.search(r'producto/[^,]*,\s*([^,]+),', block)
+    if m and m.group(1).strip().lower() not in ('1', '0', 'none', ''):
         return m.group(1).strip()
     m2 = re.search(r'"Refrigeraci.*?"",""([^"]+)"",', block)
-    if m2:
+    if m2 and m2.group(1).strip().lower() not in ('1', '0', 'none', ''):
         return m2.group(1).strip()
     return ""
 
-def procesar_marca_exito(marca_raw):
+def procesar_marca_exito(marca_raw, texto=""):
     m = marca_raw.upper().strip()
-    if not m or m in ('GENÉRICO', 'GENERICO', 'GENA©RICO', 'NONE', '0', '1', 'N/A', 'SIN MARCA'):
-        return "GENERICO"
-    return m
+    if m and m not in ('GENÉRICO', 'GENERICO', 'GENA©RICO', 'NONE', '0', '1', 'N/A', 'SIN MARCA'):
+        return m
+    texto_upper = texto.upper()
+    for marca in LISTA_MARCAS_CONOCIDAS:
+        if re.search(r'\b' + re.escape(marca) + r'\b', texto_upper):
+            return marca
+    return "GENERICO"
 
 def extract_imgs(block):
     u = re.findall(r'https?://[^\s"<>,]+\.(?:jpg|jpeg|png|gif|webp)', block, re.I)
@@ -427,14 +440,23 @@ def process():
             row = 9
             for p in parsed_items:
                 precio_final = round(p['precio'] * factor_margen)
-                marca = MARCAS_ML.get(p['marca_raw'].upper().strip(), "Genérica")
+                
+                # Rescate de marca para ML
+                marca_ml = MARCAS_ML.get(p['marca_raw'].upper().strip())
+                if not marca_ml:
+                    for km in MARCAS_ML.keys():
+                        if re.search(r'\b' + re.escape(km) + r'\b', p['texto'].upper()):
+                            marca_ml = MARCAS_ML[km]
+                            break
+                marca_ml = marca_ml or "Genérica"
+
                 tipo_aire = deducir_tipo_aire(p['texto'])
                 row_data = {
                     2: p['nombre'][:60], 4: "Nuevo", 5: generar_ean13(p['sku']), 6: "Blanco",
                     7: deducir_voltaje_ml(p['texto']), 8: deducir_voltaje_ml(p['texto']),
                     9: ",".join(p['imgs'][:10]), 10: p['sku'], 11: 1, 12: precio_final, 13: p['desc'],
                     15: "Cuotas", 16: "Sin costo", 17: "Mercado Envíos", 18: "A cargo del comprador",
-                    19: "Acepto", 20: "Garantía del vendedor", 21: 12, 22: "meses", 23: marca,
+                    19: "Acepto", 20: "Garantía del vendedor", 21: 12, 22: "meses", 23: marca_ml,
                     24: p['sku'], 25: deducir_tipo_alimentacion(p['texto']), 26: tipo_aire,
                     28: deducir_climatizacion(p['texto']), 29: "De pared" if tipo_aire == "Split" else "",
                     34: "Sí", 35: deducir_capacidad_ml(p['texto']), 36: "BTU",
@@ -452,9 +474,18 @@ def process():
             row = 5
             for p in parsed_items:
                 precio_final = round(p['precio'] * factor_margen)
-                marca = MARCAS_FALABELLA.get(p['marca_raw'].upper().strip(), "GENERICO")
+                
+                # Rescate de marca para Falabella
+                marca_fal = MARCAS_FALABELLA.get(p['marca_raw'].upper().strip())
+                if not marca_fal or marca_fal == "GENERICO":
+                    for km in MARCAS_FALABELLA.keys():
+                        if re.search(r'\b' + re.escape(km) + r'\b', p['texto'].upper()):
+                            marca_fal = MARCAS_FALABELLA[km]
+                            break
+                marca_fal = marca_fal or "GENERICO"
+
                 vals = {
-                    1: p['nombre'], 2: marca, 3: p['nombre'], 4: p['desc'], 5: 2376,
+                    1: p['nombre'], 2: marca_fal, 3: p['nombre'], 4: p['desc'], 5: 2376,
                     7: p['sku'], 8: p['sku'].replace('-', ''), 9: 'Sin variación', 10: 19, 11: 1,
                     12: precio_final, 16: deducir_tension_falabella(p['texto']), 17: deducir_capacidad_falabella(p['texto']),
                     18: 0, 19: 0, 20: 'Unidad', 41: 'Nuevo', 47: 100, 48: 40, 49: 35, 50: 40
@@ -469,7 +500,7 @@ def process():
             for r in range(ws.max_row, 3, -1): ws.delete_rows(r)
             row = 4
             for p in parsed_items:
-                marca = procesar_marca_exito(p['marca_raw'])
+                marca = procesar_marca_exito(p['marca_raw'], p['texto'])
                 imgs = p['imgs']
                 row_data = {
                     1: "", 2: p['sku'].replace('-', ''), 3: p['nombre'][:120], 4: "27432_Aires Acondicionados",
