@@ -65,16 +65,6 @@ MARCAS_FALABELLA = {
     "YETI": "GENERICO", "ZERO": "GENERICO", "ZIEHL-ABEGG": "GENERICO", "ZI ZHENG LAN": "GENERICO"
 }
 
-MARCAS_EXITO = {
-    "BOSCH": "BOSCH", "CARRIER": "CARRIER", "CHEVRON": "CHEVRON", "COPELAND": "COPELAND",
-    "DAIKIN": "DAIKIN", "DANFOSS": "DANFOSS", "DUPONT": "DUPONT", "ELECTROLUX": "ELECTROLUX",
-    "EMERSON": "EMERSON", "GENERAL ELECTRIC": "GENERAL ELECTRIC", "GREE": "GREE",
-    "HACEB": "HACEB", "HISENSE": "HISENSE", "HONEYWELL": "HONEYWELL", "LG": "LG",
-    "LOCTITE": "LOCTITE", "MABE": "MABE", "MIDEA": "MIDEA", "PANASONIC": "PANASONIC",
-    "SAMSUNG": "SAMSUNG", "TRANE": "TRANE", "TYCO": "TYCO", "WEG": "WEG",
-    "WESTINGHOUSE": "WESTINGHOUSE", "WHITE RODGERS": "WHITE RODGERS", "3M": "3M"
-}
-
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -279,6 +269,12 @@ def extract_marca_raw(block):
         return m2.group(1).strip()
     return ""
 
+def procesar_marca_exito(marca_raw):
+    m = marca_raw.upper().strip()
+    if not m or m in ('GENÉRICO', 'GENERICO', 'GENA©RICO', 'NONE', '0', '1', 'N/A', 'SIN MARCA'):
+        return "GENERICO"
+    return m
+
 def extract_imgs(block):
     u = re.findall(r'https?://[^\s"<>,]+\.(?:jpg|jpeg|png|gif|webp)', block, re.I)
     seen = []
@@ -473,7 +469,7 @@ def process():
             for r in range(ws.max_row, 3, -1): ws.delete_rows(r)
             row = 4
             for p in parsed_items:
-                marca = MARCAS_EXITO.get(p['marca_raw'].upper().strip(), "GENERICO")
+                marca = procesar_marca_exito(p['marca_raw'])
                 imgs = p['imgs']
                 row_data = {
                     1: "", 2: p['sku'].replace('-', ''), 3: p['nombre'][:120], 4: "27432_Aires Acondicionados",
