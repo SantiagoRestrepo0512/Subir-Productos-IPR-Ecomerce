@@ -1,12 +1,11 @@
-from http.server import BaseHTTPRequestHandler
-import io, re, html, json, cgi
+from flask import Flask, request, send_file, jsonify, render_template_string
+import io, re, html, os
 import openpyxl
+
+app = Flask(__name__)
 
 BTU_SET = {9000, 12000, 18000, 24000, 30000, 36000, 42000, 48000, 50000, 60000}
 
-# ---------------------------------------------------------------------
-# DICCIONARIOS DE MARCAS
-# ---------------------------------------------------------------------
 MARCAS_ML = {
     "BOSCH": "BOSCH", "CARRIER": "CARRIER", "CHEVRON": "CHEVRON", "COPELAND": "COPELAND",
     "DAIKIN": "DAIKIN", "DANFOSS": "DANFOSS", "DUPONT": "DUPONT", "ELECTROLUX": "ELECTROLUX",
@@ -67,9 +66,166 @@ MARCAS_EXITO = {
     "WESTINGHOUSE": "WESTINGHOUSE", "WHITE RODGERS": "WHITE RODGERS", "3M": "3M"
 }
 
-# ---------------------------------------------------------------------
-# FUNCIONES DE PARSEO GENERAL
-# ---------------------------------------------------------------------
+HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hub de Marketplaces IPR (ML - Falabella - Éxito)</title>
+  <style>
+    :root {
+      --primary: #2563eb; --bg: #0b0f19; --card: #161f30; --card-inner: #0f172a;
+      --text: #f8fafc; --text-muted: #94a3b8; --border: #334155; --success: #10b981;
+    }
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); padding: 30px 15px; display: flex; justify-content: center; margin: 0; }
+    .container { width: 100%; max-width: 720px; background: var(--card); border-radius: 16px; border: 1px solid var(--border); box-shadow: 0 20px 40px rgba(0,0,0,0.5); padding: 35px; }
+    .header { text-align: center; margin-bottom: 25px; }
+    .header h1 { font-size: 1.8rem; margin: 0 0 6px 0; color: #ffffff; }
+    .header p { color: var(--text-muted); margin: 0; font-size: 0.95rem; }
+    .market-tabs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 25px; }
+    .tab-btn {
+      background: var(--card-inner); border: 2px solid var(--border); color: var(--text-muted); padding: 14px 10px;
+      border-radius: 12px; cursor: pointer; text-align: center; font-weight: 600; font-size: 0.95rem;
+      transition: all 0.2s ease; user-select: none;
+    }
+    .tab-btn:hover { border-color: #64748b; color: #ffffff; }
+    .tab-btn.active { border-color: #38bdf8; background: rgba(56, 189, 248, 0.12); color: #38bdf8; }
+    .form-group { margin-bottom: 20px; }
+    label { display: block; font-weight: 600; margin-bottom: 8px; font-size: 0.9rem; color: #cbd5e1; }
+    input[type="file"], textarea, input[type="number"] {
+      width: 100%; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px;
+      font-size: 0.95rem; background: var(--card-inner); color: #ffffff;
+    }
+    input[type="file"]::file-selector-button {
+      background: #334155; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; margin-right: 10px;
+    }
+    textarea { height: 110px; resize: vertical; font-family: monospace; font-size: 0.9rem; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+    .badge-info {
+      display: inline-block; background: rgba(16, 185, 129, 0.15); color: #34d399; font-size: 0.8rem;
+      padding: 5px 10px; border-radius: 6px; margin-top: 6px;
+    }
+    button.btn-submit {
+      width: 100%; background: var(--success); color: white; border: none; padding: 16px; border-radius: 10px;
+      font-size: 1.05rem; font-weight: bold; cursor: pointer; transition: background 0.2s; margin-top: 10px;
+    }
+    button.btn-submit:hover { background: #059669; }
+    button.btn-submit:disabled { background: #475569; cursor: not-allowed; }
+    #status { margin-top: 20px; font-size: 0.95rem; text-align: center; font-weight: 500; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>📦 Generador Marketplaces IPR</h1>
+    <p>Plantillas oficiales procesadas directamente con Python en la nube</p>
+  </div>
+
+  <form id="unifiedForm">
+    <input type="hidden" id="marketplaceInput" name="marketplace" value="ml">
+
+    <label>1. Selecciona el Marketplace a procesar:</label>
+    <div class="market-tabs">
+      <div class="tab-btn active" onclick="selectMarket('ml', 22, 'Mercado Libre')">🟡 Mercado Libre</div>
+      <div class="tab-btn" onclick="selectMarket('falabella', 17, 'Falabella')">🟢 Falabella</div>
+      <div class="tab-btn" onclick="selectMarket('exito', 22, 'Éxito')">🔴 Éxito</div>
+    </div>
+
+    <div class="grid-2">
+      <div class="form-group">
+        <label>2. Archivo CSV Maestro:</label>
+        <input type="file" id="csvFile" name="csv_file" accept=".csv" required>
+      </div>
+      <div class="form-group">
+        <label id="lblPlantilla">3. Plantilla Excel Mercado Libre (.xlsx):</label>
+        <input type="file" id="xlsxFile" name="xlsx_file" accept=".xlsx" required>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Margen de Ganancia (%):</label>
+      <input type="number" id="margen" name="margen" value="22" min="0" max="200" step="0.5">
+      <div class="badge-info" id="badgeMargen">Margen predeterminado: 22%</div>
+    </div>
+
+    <div class="form-group">
+      <label>4. SKUs a procesar (uno por línea o separados por coma):</label>
+      <textarea id="skus" name="skus" placeholder="614-0109&#10;614-0108&#10;614-0107" required>614-0109
+614-0108
+614-0107</textarea>
+    </div>
+
+    <button type="submit" class="btn-submit" id="btnSubmit">⚡ GENERAR EXCEL PARA MERCADO LIBRE</button>
+  </form>
+
+  <div id="status"></div>
+</div>
+
+<script>
+let currentMarket = 'ml';
+function selectMarket(market, defaultMargin, marketName) {
+  currentMarket = market;
+  document.getElementById('marketplaceInput').value = market;
+  document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+  document.getElementById('margen').value = defaultMargin;
+  document.getElementById('badgeMargen').textContent = `Margen predeterminado para ${marketName}: ${defaultMargin}%`;
+  document.getElementById('lblPlantilla').textContent = `3. Plantilla Excel ${marketName} (.xlsx):`;
+  document.getElementById('btnSubmit').textContent = `⚡ GENERAR EXCEL PARA ${marketName.toUpperCase()}`;
+}
+
+document.getElementById('unifiedForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById('btnSubmit');
+  const status = document.getElementById('status');
+  btn.disabled = true;
+  btn.textContent = "⏳ Procesando con openpyxl en Vercel...";
+  status.textContent = "Analizando SKUs, mapeando columnas oficiales y construyendo el Excel...";
+  status.style.color = "#38bdf8";
+
+  const formData = new FormData(document.getElementById('unifiedForm'));
+
+  try {
+    const res = await fetch('/api/process', { method: 'POST', body: formData });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || `Error en el servidor (${res.status})`);
+    }
+
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    
+    let defaultNames = {
+      'ml': 'mercadolibre_ipr_FILTRADO_FINAL.xlsx',
+      'falabella': 'fallabela_ipr_FILTRADO_FINAL.xlsx',
+      'exito': 'exito_ipr_FILTRADO_FINAL_ESTANDARIZADO.xlsx'
+    };
+    
+    a.download = defaultNames[currentMarket] || "catalogo_procesado.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+
+    status.textContent = `✅ ¡Archivo generado y descargado con éxito!`;
+    status.style.color = "#34d399";
+  } catch (err) {
+    status.textContent = "❌ Error: " + err.message;
+    status.style.color = "#f87171";
+    alert("Ocurrió un error: " + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = `⚡ GENERAR EXCEL PARA ${currentMarket.toUpperCase()}`;
+  }
+});
+</script>
+</body>
+</html>
+"""
+
 def extract_id(block):
     m = re.match(r'"(\d+),simple,', block)
     return int(m.group(1)) if m else None
@@ -77,7 +233,7 @@ def extract_id(block):
 def extract_precio(block):
     rid = extract_id(block)
     cand = []
-    for n in re.findall(r'\d{5,8}', block):
+    for n in re.findall(r'\b\d{5,8}\b', block):
         v = int(n)
         if v in BTU_SET or 1900 <= v <= 2099 or (rid is not None and v == rid):
             continue
@@ -104,9 +260,8 @@ def extract_desc(block):
     while prev != region:
         prev = region
         region = html.unescape(region)
-    region = region.replace('\n', ' ').replace('
-', ' ').replace('', ' ').replace('	', ' ')
-    region = re.sub(r'<(script|style)[^>]*>.*?</>', ' ', region, flags=re.I | re.S)
+    region = region.replace('\\n', ' ').replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+    region = re.sub(r'<(script|style)[^>]*>.*?</\1>', ' ', region, flags=re.I | re.S)
     region = re.sub(r'<[^>]+>', ' ', region)
     text = region.replace('""', '"').replace('"', ' ')
     text = re.sub(r'[;\s]+', ' ', text).strip()
@@ -114,7 +269,7 @@ def extract_desc(block):
     return re.sub(r'^[^\w]+', '', text).strip()
 
 def extract_marca_raw(block):
-    m = re.search(r'producto/[^,]*,\s*([^,]+),', block)
+    m = re.search(r'producto/[^,]*,\\s*([^,]+),', block)
     if m and m.group(1).strip().lower() not in ('1','0','none',''):
         return m.group(1).strip()
     m2 = re.search(r'"Refrigeraci.*?"",""([^"]+)"",', block)
@@ -136,9 +291,6 @@ def generar_ean13(sku):
     check_digit = (10 - (s % 10)) % 10
     return base12 + str(check_digit)
 
-# ---------------------------------------------------------------------
-# DEDUCCIONES MERCADO LIBRE
-# ---------------------------------------------------------------------
 def deducir_capacidad_ml(text):
     m = re.search(r'(\d{1,2}(?:[\.,]\d{3})?|\d{4,5})\s*BTU', text, re.I)
     if m:
@@ -162,7 +314,7 @@ def deducir_tipo_alimentacion(text):
 
 def deducir_refrigerante_ml(text):
     for r in ['R-410A', 'R-32', 'R-22', 'R134', 'R600A']:
-        if re.search(r'' + re.escape(r) + r'', text, re.I): return r
+        if re.search(r'\b' + re.escape(r) + r'\b', text, re.I): return r
     return "R-410A"
 
 def deducir_climatizacion(text):
@@ -173,13 +325,10 @@ def deducir_tipo_aire(text):
     if re.search(r'ventana', text, re.I): return "Ventana"
     return "Split"
 
-# ---------------------------------------------------------------------
-# DEDUCCIONES FALABELLA
-# ---------------------------------------------------------------------
 def deducir_capacidad_falabella(t):
     m = re.search(r'(\d[\d .]{2,6})\s*BTU', t, re.I)
     if m: return (re.sub(r'\D', '', m.group(1)) + ' BTU').strip()
-    m = re.search(r'(\d{1,2})\s*K', t)
+    m = re.search(r'(\d{1,2})\s*K\b', t)
     if m: return m.group(0).strip()
     m = re.search(r'(\d+(?:\.\d+)?)\s*HP', t, re.I)
     if m: return m.group(0).strip()
@@ -189,9 +338,6 @@ def deducir_tension_falabella(t):
     m = re.search(r'(\d{3})\s*V', t, re.I)
     return m.group(1) if m else ''
 
-# ---------------------------------------------------------------------
-# DEDUCCIONES ÉXITO
-# ---------------------------------------------------------------------
 def deducir_capacidad_exito(text):
     m = re.search(r'(\d{1,2}(?:[\.,]\d{3})?|\d{4,5})\s*BTU', text, re.I)
     if m:
@@ -211,7 +357,7 @@ def deducir_voltaje_exito(text):
 
 def deducir_refrigerante_exito(text):
     for r in ['R-410A', 'R-32', 'R-22', 'R134', 'R600A']:
-        if re.search(r'' + re.escape(r) + r'', text, re.I):
+        if re.search(r'\b' + re.escape(r) + r'\b', text, re.I):
             return r
     return "Otro"
 
@@ -220,223 +366,137 @@ def deducir_tecnologia_exito(text):
     if re.search(r'inverter', text, re.I): return "Inverter"
     return "Convencional"
 
-# ---------------------------------------------------------------------
-# PROCESAMIENTOS 100% IDÉNTICOS A LOS COLABS
-# ---------------------------------------------------------------------
-def procesar_ml(wb, items, factor_margen):
-    ws = wb['Aires Acondicionados'] if 'Aires Acondicionados' in wb.sheetnames else wb.sheetnames[0]
-    for r in range(ws.max_row, 8, -1):
-        ws.delete_rows(r)
-    row = 9
-    for p in items:
-        precio_final = round(p['precio'] * factor_margen)
-        marca = MARCAS_ML.get(p['marca_raw'].upper().strip(), "Genérica")
-        ean13 = generar_ean13(p['sku'])
-        tipo_aire = deducir_tipo_aire(p['texto'])
-        inverter = "Sí" if "inverter" in p['texto'].lower() else "No"
-        wifi = "Sí" if "wifi" in p['texto'].lower() or "wi-fi" in p['texto'].lower() else "No"
+@app.route('/', methods=['GET'])
+def index():
+    return render_template_string(HTML_TEMPLATE)
 
-        row_data = {
-            2: p['nombre'][:60],
-            4: "Nuevo",
-            5: ean13,
-            6: "Blanco",
-            7: deducir_voltaje_ml(p['texto']),
-            8: deducir_voltaje_ml(p['texto']),
-            9: ",".join(p['imgs'][:10]),
-            10: p['sku'],
-            11: 1,
-            12: precio_final,
-            13: p['desc'],
-            15: "Cuotas",
-            16: "Sin costo",
-            17: "Mercado Envíos",
-            18: "A cargo del comprador",
-            19: "Acepto",
-            20: "Garantía del vendedor",
-            21: 12,
-            22: "meses",
-            23: marca,
-            24: p['sku'],
-            25: deducir_tipo_alimentacion(p['texto']),
-            26: tipo_aire,
-            28: deducir_climatizacion(p['texto']),
-            29: "De pared" if tipo_aire == "Split" else "",
-            34: "Sí",
-            35: deducir_capacidad_ml(p['texto']),
-            36: "BTU",
-            37: wifi,
-            38: "Sí",
-            39: "Sí",
-            40: deducir_refrigerante_ml(p['texto']),
-            41: inverter
-        }
-        for c, val in row_data.items():
-            ws.cell(row=row, column=c, value=val)
-        row += 1
+@app.route('/api/process', methods=['POST'])
+def process():
+    try:
+        marketplace = request.form.get('marketplace', 'ml')
+        skus_raw = request.form.get('skus', '')
+        margen_pct = float(request.form.get('margen', 22))
+        factor_margen = 1.0 + (margen_pct / 100.0)
 
-def procesar_falabella(wb, items, factor_margen):
-    ws = wb['Subir plantilla'] if 'Subir plantilla' in wb.sheetnames else wb.sheetnames[0]
-    for r in range(ws.max_row, 4, -1):
-        ws.delete_rows(r)
-    row = 5
-    for p in items:
-        precio_final = round(p['precio'] * factor_margen)
-        marca = MARCAS_FALABELLA.get(p['marca_raw'].upper().strip(), "GENERICO")
-        
-        vals = {
-            1: p['nombre'], 2: marca, 3: p['nombre'], 4: p['desc'], 5: 2376,
-            7: p['sku'], 8: p['sku'].replace('-', ''), 9: 'Sin variación', 10: 19, 11: 1,
-            12: precio_final, 16: deducir_tension_falabella(p['texto']), 17: deducir_capacidad_falabella(p['texto']),
-            18: 0, 19: 0, 20: 'Unidad', 41: 'Nuevo',
-            47: 100, 48: 40, 49: 35, 50: 40
-        }
-        for c, v in vals.items():
-            ws.cell(row=row, column=c, value=v)
-        for j, u in enumerate(p['imgs'][:8]):
-            ws.cell(row=row, column=51 + j, value=u)
-        row += 1
+        csv_file = request.files.get('csv_file')
+        xlsx_file = request.files.get('xlsx_file')
 
-def procesar_exito(wb, items, factor_margen):
-    ws = wb['Aires Acondicionados'] if 'Aires Acondicionados' in wb.sheetnames else wb.sheetnames[0]
-    for r in range(ws.max_row, 3, -1):
-        ws.delete_rows(r)
-    row = 4
-    for p in items:
-        marca = MARCAS_EXITO.get(p['marca_raw'].upper().strip(), "GENERICO")
-        imgs = p['imgs']
-        row_data = {
-            1: "",
-            2: p['sku'].replace('-', ''),
-            3: p['nombre'][:120],
-            4: "27432_Aires Acondicionados",
-            5: marca,
-            6: p['desc'],
-            7: f"{marca}, {p['sku']}, Aire Acondicionado, Refrigeracion",
-            8: 35,
-            9: 100,
-            10: 40,
-            11: 40,
-            12: 3,
-            13: 35,
-            14: 100,
-            15: 40,
-            16: 40,
-            17: "Unidad",
-            18: 1,
-            19: "Technology",
-            20: imgs[0] if len(imgs) > 0 else "N/A",
-            21: imgs[1] if len(imgs) > 1 else "",
-            22: imgs[2] if len(imgs) > 2 else "",
-            23: imgs[3] if len(imgs) > 3 else "",
-            24: imgs[4] if len(imgs) > 4 else "",
-            25: "",
-            26: 0,
-            27: "N/A",
-            28: "N/A",
-            29: "Sin advertencias específicas",
-            30: deducir_tipo_aire(p['texto']),
-            31: deducir_capacidad_exito(p['texto']),
-            32: deducir_voltaje_exito(p['texto']),
-            33: deducir_refrigerante_exito(p['texto']),
-            34: "N/A",
-            35: "Control remoto, Manual de usuario",
-            36: "N/A",
-            37: deducir_tecnologia_exito(p['texto']),
-            38: "No Aplica"
-        }
-        for c, val in row_data.items():
-            ws.cell(row=row, column=c, value=val)
-        row += 1
+        if not csv_file or not xlsx_file:
+            return jsonify({"error": "Debes subir ambos archivos (CSV y Plantilla Excel)"}), 400
 
-# ---------------------------------------------------------------------
-# HANDLER VERCEL (HTTP POST)
-# ---------------------------------------------------------------------
-class handler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        ctype, pdict = cgi.parse_header(self.headers.get('content-type'))
-        if ctype != 'multipart/form-data':
-            self.send_response(400)
-            self.end_headers()
-            self.wfile.write(b"Expected multipart/form-data")
-            return
-            
-        pdict['boundary'] = bytes(pdict['boundary'], "utf-8")
-        pdict['CONTENT-LENGTH'] = int(self.headers.get('content-length'))
-        fields = cgi.parse_multipart(self.rfile, pdict)
-        
-        try:
-            marketplace = fields.get('marketplace', ['ml'])[0]
-            if isinstance(marketplace, bytes): marketplace = marketplace.decode('utf-8')
-            
-            csv_content = fields.get('csv_file')[0]
-            xlsx_content = fields.get('xlsx_file')[0]
-            skus_raw = fields.get('skus')[0].decode('utf-8') if isinstance(fields.get('skus')[0], bytes) else fields.get('skus')[0]
-            margen_pct = float(fields.get('margen', [22])[0])
-            factor_margen = 1.0 + (margen_pct / 100.0)
-            
-            raw = csv_content.decode("utf-8-sig", errors="replace") if isinstance(csv_content, bytes) else str(csv_content)
-            starts = [m.start() for m in re.finditer(r'(?m)^"\d+', raw)]
-            starts.append(len(raw))
-            
-            def get_block(sku):
-                pos = raw.find(sku)
-                if pos < 0: return None
-                for i, st in enumerate(starts[:-1]):
-                    if st <= pos < starts[i+1]:
-                        return raw[st:starts[i+1]]
-                return None
-                
-            skus_list = [s.strip() for s in re.split(r'[\n,]+', skus_raw) if s.strip()]
-            
-            parsed_items = []
-            for sku in skus_list:
-                b = get_block(sku)
-                if not b: continue
-                nombre = limpiar_nombre(extract_nombre(b, sku))
-                precio = extract_precio(b)
-                desc = extract_desc(b) or "Sin descripción"
-                marca_raw = extract_marca_raw(b)
-                imgs = extract_imgs(b)
-                texto = f"{nombre} {desc}"
-                
-                parsed_items.append({
-                    "sku": sku,
-                    "nombre": nombre,
-                    "precio": precio,
-                    "desc": desc,
-                    "marca_raw": marca_raw,
-                    "imgs": imgs,
-                    "texto": texto
-                })
-                
-            wb = openpyxl.load_workbook(io.BytesIO(xlsx_content))
-            
-            if marketplace == "ml":
-                procesar_ml(wb, parsed_items, factor_margen)
-                out_name = "mercadolibre_ipr_FILTRADO_FINAL.xlsx"
-            elif marketplace == "falabella":
-                procesar_falabella(wb, parsed_items, factor_margen)
-                out_name = "fallabela_ipr_FILTRADO_FINAL.xlsx"
-            elif marketplace == "exito":
-                procesar_exito(wb, parsed_items, factor_margen)
-                out_name = "exito_ipr_FILTRADO_FINAL_ESTANDARIZADO.xlsx"
-            else:
-                raise ValueError("Marketplace no soportado")
-                
-            out_buf = io.BytesIO()
-            wb.save(out_buf)
-            out_data = out_buf.getvalue()
-            
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-            self.send_header('Content-Disposition', f'attachment; filename="{out_name}"')
-            self.send_header('Content-Length', str(len(out_data)))
-            self.end_headers()
-            self.wfile.write(out_data)
-            
-        except Exception as e:
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+        raw = csv_file.read().decode("utf-8-sig", errors="replace")
+        xlsx_bytes = xlsx_file.read()
+
+        starts = [m.start() for m in re.finditer(r'(?m)^"\d+', raw)]
+        starts.append(len(raw))
+
+        def get_block(sku):
+            pos = raw.find(sku)
+            if pos < 0: return None
+            for i, st in enumerate(starts[:-1]):
+                if st <= pos < starts[i+1]:
+                    return raw[st:starts[i+1]]
+            return None
+
+        skus_list = [s.strip() for s in re.split(r'[\n,]+', skus_raw) if s.strip()]
+
+        parsed_items = []
+        for sku in skus_list:
+            b = get_block(sku)
+            if not b: continue
+            nombre = limpiar_nombre(extract_nombre(b, sku))
+            precio = extract_precio(b)
+            desc = extract_desc(b) or "Sin descripción"
+            marca_raw = extract_marca_raw(b)
+            imgs = extract_imgs(b)
+            texto = f"{nombre} {desc}"
+
+            parsed_items.append({
+                "sku": sku, "nombre": nombre, "precio": precio, "desc": desc,
+                "marca_raw": marca_raw, "imgs": imgs, "texto": texto
+            })
+
+        wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
+
+        if marketplace == "ml":
+            ws = wb['Aires Acondicionados'] if 'Aires Acondicionados' in wb.sheetnames else wb.sheetnames[0]
+            for r in range(ws.max_row, 8, -1): ws.delete_rows(r)
+            row = 9
+            for p in parsed_items:
+                precio_final = round(p['precio'] * factor_margen)
+                marca = MARCAS_ML.get(p['marca_raw'].upper().strip(), "Genérica")
+                tipo_aire = deducir_tipo_aire(p['texto'])
+                row_data = {
+                    2: p['nombre'][:60], 4: "Nuevo", 5: generar_ean13(p['sku']), 6: "Blanco",
+                    7: deducir_voltaje_ml(p['texto']), 8: deducir_voltaje_ml(p['texto']),
+                    9: ",".join(p['imgs'][:10]), 10: p['sku'], 11: 1, 12: precio_final, 13: p['desc'],
+                    15: "Cuotas", 16: "Sin costo", 17: "Mercado Envíos", 18: "A cargo del comprador",
+                    19: "Acepto", 20: "Garantía del vendedor", 21: 12, 22: "meses", 23: marca,
+                    24: p['sku'], 25: deducir_tipo_alimentacion(p['texto']), 26: tipo_aire,
+                    28: deducir_climatizacion(p['texto']), 29: "De pared" if tipo_aire == "Split" else "",
+                    34: "Sí", 35: deducir_capacidad_ml(p['texto']), 36: "BTU",
+                    37: "Sí" if "wifi" in p['texto'].lower() or "wi-fi" in p['texto'].lower() else "No",
+                    38: "Sí", 39: "Sí", 40: deducir_refrigerante_ml(p['texto']),
+                    41: "Sí" if "inverter" in p['texto'].lower() else "No"
+                }
+                for c, val in row_data.items(): ws.cell(row=row, column=c, value=val)
+                row += 1
+            out_name = "mercadolibre_ipr_FILTRADO_FINAL.xlsx"
+
+        elif marketplace == "falabella":
+            ws = wb['Subir plantilla'] if 'Subir plantilla' in wb.sheetnames else wb.sheetnames[0]
+            for r in range(ws.max_row, 4, -1): ws.delete_rows(r)
+            row = 5
+            for p in parsed_items:
+                precio_final = round(p['precio'] * factor_margen)
+                marca = MARCAS_FALABELLA.get(p['marca_raw'].upper().strip(), "GENERICO")
+                vals = {
+                    1: p['nombre'], 2: marca, 3: p['nombre'], 4: p['desc'], 5: 2376,
+                    7: p['sku'], 8: p['sku'].replace('-', ''), 9: 'Sin variación', 10: 19, 11: 1,
+                    12: precio_final, 16: deducir_tension_falabella(p['texto']), 17: deducir_capacidad_falabella(p['texto']),
+                    18: 0, 19: 0, 20: 'Unidad', 41: 'Nuevo', 47: 100, 48: 40, 49: 35, 50: 40
+                }
+                for c, v in vals.items(): ws.cell(row=row, column=c, value=v)
+                for j, u in enumerate(p['imgs'][:8]): ws.cell(row=row, column=51 + j, value=u)
+                row += 1
+            out_name = "fallabela_ipr_FILTRADO_FINAL.xlsx"
+
+        elif marketplace == "exito":
+            ws = wb['Aires Acondicionados'] if 'Aires Acondicionados' in wb.sheetnames else wb.sheetnames[0]
+            for r in range(ws.max_row, 3, -1): ws.delete_rows(r)
+            row = 4
+            for p in parsed_items:
+                marca = MARCAS_EXITO.get(p['marca_raw'].upper().strip(), "GENERICO")
+                imgs = p['imgs']
+                row_data = {
+                    1: "", 2: p['sku'].replace('-', ''), 3: p['nombre'][:120], 4: "27432_Aires Acondicionados",
+                    5: marca, 6: p['desc'], 7: f"{marca}, {p['sku']}, Aire Acondicionado, Refrigeracion",
+                    8: 35, 9: 100, 10: 40, 11: 40, 12: 3, 13: 35, 14: 100, 15: 40, 16: 40, 17: "Unidad",
+                    18: 1, 19: "Technology", 20: imgs[0] if len(imgs) > 0 else "N/A",
+                    21: imgs[1] if len(imgs) > 1 else "", 22: imgs[2] if len(imgs) > 2 else "",
+                    23: imgs[3] if len(imgs) > 3 else "", 24: imgs[4] if len(imgs) > 4 else "",
+                    25: "", 26: 0, 27: "N/A", 28: "N/A", 29: "Sin advertencias específicas",
+                    30: deducir_tipo_aire(p['texto']), 31: deducir_capacidad_exito(p['texto']),
+                    32: deducir_voltaje_exito(p['texto']), 33: deducir_refrigerante_exito(p['texto']),
+                    34: "N/A", 35: "Control remoto, Manual de usuario", 36: "N/A",
+                    37: deducir_tecnologia_exito(p['texto']), 38: "No Aplica"
+                }
+                for c, val in row_data.items(): ws.cell(row=row, column=c, value=val)
+                row += 1
+            out_name = "exito_ipr_FILTRADO_FINAL_ESTANDARIZADO.xlsx"
+
+        out_buf = io.BytesIO()
+        wb.save(out_buf)
+        out_buf.seek(0)
+
+        return send_file(
+            out_buf,
+            as_attachment=True,
+            download_name=out_name,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(port=5000)
