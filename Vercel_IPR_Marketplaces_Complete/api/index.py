@@ -71,7 +71,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Hub de Marketplaces IPR (ML - Falabella - Éxito)</title>
+  <title>Hub de Marketplaces IPR</title>
   <style>
     :root {
       --primary: #2563eb; --bg: #0b0f19; --card: #161f30; --card-inner: #0f172a;
@@ -134,8 +134,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
     <div class="grid-2">
       <div class="form-group">
-        <label>2. Archivo CSV Maestro:</label>
-        <input type="file" id="csvFile" name="csv_file" accept=".csv" required>
+        <label>2. Archivo CSV Maestro (Catálogo):</label>
+        <input type="file" id="csvFile" accept=".csv" required>
       </div>
       <div class="form-group">
         <label id="lblPlantilla">3. Plantilla Excel Mercado Libre (.xlsx):</label>
@@ -180,13 +180,56 @@ document.getElementById('unifiedForm').addEventListener('submit', async (e) => {
   const btn = document.getElementById('btnSubmit');
   const status = document.getElementById('status');
   btn.disabled = true;
-  btn.textContent = "⏳ Procesando con openpyxl en Vercel...";
-  status.textContent = "Analizando SKUs, mapeando columnas oficiales y construyendo el Excel...";
+  btn.textContent = "⏳ Extrayendo SKUs en el navegador...";
+  status.textContent = "Filtrando datos de productos seleccionados...";
   status.style.color = "#38bdf8";
 
-  const formData = new FormData(document.getElementById('unifiedForm'));
-
   try {
+    const csvFileInput = document.getElementById('csvFile').files[0];
+    const skusRaw = document.getElementById('skus').value;
+    const skusList = skusRaw.split(/[\\n,]+/).map(s => s.trim()).filter(Boolean);
+
+    if (skusList.length === 0) {
+      throw new Error("Ingresa al menos un SKU.");
+    }
+
+    // Lectura y pre-filtrado en el navegador (evita el error 413 de Vercel)
+    const rawCSV = await csvFileInput.text();
+    const regex = /^"\\d+/gm;
+    let starts = [];
+    let match;
+    while ((match = regex.exec(rawCSV)) !== null) {
+      starts.push(match.index);
+    }
+    starts.push(rawCSV.length);
+
+    let extractedBlocks = [];
+    for (let sku of skusList) {
+      const pos = rawCSV.indexOf(sku);
+      if (pos >= 0) {
+        for (let i = 0; i < starts.length - 1; i++) {
+          if (starts[i] <= pos && pos < starts[i+1]) {
+            extractedBlocks.push(rawCSV.substring(starts[i], starts[i+1]));
+            break;
+          }
+        }
+      }
+    }
+
+    if (extractedBlocks.length === 0) {
+      throw new Error("No se encontró ninguno de los SKUs ingresados en el archivo CSV.");
+    }
+
+    btn.textContent = "⏳ Procesando con openpyxl en Vercel...";
+    status.textContent = "Generando plantilla oficial en el servidor...";
+
+    const formData = new FormData();
+    formData.append('marketplace', currentMarket);
+    formData.append('margen', document.getElementById('margen').value);
+    formData.append('skus', skusRaw);
+    formData.append('xlsx_file', document.getElementById('xlsxFile').files[0]);
+    formData.append('csv_payload', extractedBlocks.join('\\n'));
+
     const res = await fetch('/api/process', { method: 'POST', body: formData });
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
@@ -210,7 +253,7 @@ document.getElementById('unifiedForm').addEventListener('submit', async (e) => {
     a.remove();
     window.URL.revokeObjectURL(url);
 
-    status.textContent = `✅ ¡Archivo generado y descargado con éxito!`;
+    status.textContent = `✅ ¡Archivo ${a.download} generado y descargado con éxito!`;
     status.style.color = "#34d399";
   } catch (err) {
     status.textContent = "❌ Error: " + err.message;
@@ -378,37 +421,26 @@ def process():
         margen_pct = float(request.form.get('margen', 22))
         factor_margen = 1.0 + (margen_pct / 100.0)
 
-        csv_file = request.files.get('csv_file')
+        csv_payload = request.form.get('csv_payload', '')
         xlsx_file = request.files.get('xlsx_file')
 
-        if not csv_file or not xlsx_file:
-            return jsonify({"error": "Debes subir ambos archivos (CSV y Plantilla Excel)"}), 400
+        if not csv_payload or not xlsx_file:
+            return jsonify({"error": "Faltan datos del producto o la plantilla Excel."}), 400
 
-        raw = csv_file.read().decode("utf-8-sig", errors="replace")
         xlsx_bytes = xlsx_file.read()
-
-        starts = [m.start() for m in re.finditer(r'(?m)^"\d+', raw)]
-        starts.append(len(raw))
-
-        def get_block(sku):
-            pos = raw.find(sku)
-            if pos < 0: return None
-            for i, st in enumerate(starts[:-1]):
-                if st <= pos < starts[i+1]:
-                    return raw[st:starts[i+1]]
-            return None
-
         skus_list = [s.strip() for s in re.split(r'[\n,]+', skus_raw) if s.strip()]
 
         parsed_items = []
         for sku in skus_list:
-            b = get_block(sku)
-            if not b: continue
-            nombre = limpiar_nombre(extract_nombre(b, sku))
-            precio = extract_precio(b)
-            desc = extract_desc(b) or "Sin descripción"
-            marca_raw = extract_marca_raw(b)
-            imgs = extract_imgs(b)
+            pos = csv_payload.find(sku)
+            if pos < 0: continue
+            
+            # Extraer bloque del payload
+            nombre = limpiar_nombre(extract_nombre(csv_payload, sku))
+            precio = extract_precio(csv_payload)
+            desc = extract_desc(csv_payload) or "Sin descripción"
+            marca_raw = extract_marca_raw(csv_payload)
+            imgs = extract_imgs(csv_payload)
             texto = f"{nombre} {desc}"
 
             parsed_items.append({
