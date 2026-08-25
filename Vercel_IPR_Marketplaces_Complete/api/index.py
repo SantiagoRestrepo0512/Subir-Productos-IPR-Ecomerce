@@ -347,7 +347,7 @@ def deducir_capacidad_falabella(t):
 
 def deducir_tension_falabella(t):
     m = re.search(r'(\d{3})\s*V', t, re.I)
-    return m.group(1) if m else ''
+    return int(m.group(1)) if m else 220
 
 def deducir_capacidad_exito(text):
     m = re.search(r'(\d{1,2}(?:[\.,]\d{3})?|\d{4,5})\s*BTU', text, re.I)
@@ -477,7 +477,7 @@ def process():
                 
                 # Rescate de marca para Falabella
                 marca_fal = MARCAS_FALABELLA.get(p['marca_raw'].upper().strip())
-                if not marca_fal or marca_fal == "GENERICO":
+                if not marca_fal:
                     for km in MARCAS_FALABELLA.keys():
                         if re.search(r'\b' + re.escape(km) + r'\b', p['texto'].upper()):
                             marca_fal = MARCAS_FALABELLA[km]
@@ -485,10 +485,27 @@ def process():
                 marca_fal = marca_fal or "GENERICO"
 
                 vals = {
-                    1: p['nombre'], 2: marca_fal, 3: p['nombre'], 4: p['desc'], 5: 2376,
-                    7: p['sku'], 8: p['sku'].replace('-', ''), 9: 'Sin variación', 10: 19, 11: 1,
-                    12: precio_final, 16: deducir_tension_falabella(p['texto']), 17: deducir_capacidad_falabella(p['texto']),
-                    18: 0, 19: 0, 20: 'Unidad', 41: 'Nuevo', 47: 100, 48: 40, 49: 35, 50: 40
+                    1: p['nombre'], 
+                    2: marca_fal, 
+                    3: p['nombre'], 
+                    4: p['desc'], 
+                    5: 2376,
+                    7: p['sku'], 
+                    8: generar_ean13(p['sku']), 
+                    9: 'Sin variación', 
+                    10: 19, 
+                    11: 1,
+                    12: precio_final, 
+                    16: deducir_tension_falabella(p['texto']), 
+                    17: deducir_capacidad_falabella(p['texto']),
+                    18: 0, 
+                    19: 0, 
+                    20: 'Unidad', 
+                    41: 'Nuevo', 
+                    47: 100, 
+                    48: 40, 
+                    49: 35, 
+                    50: 40
                 }
                 for c, v in vals.items(): ws.cell(row=row, column=c, value=v)
                 for j, u in enumerate(p['imgs'][:8]): ws.cell(row=row, column=51 + j, value=u)
