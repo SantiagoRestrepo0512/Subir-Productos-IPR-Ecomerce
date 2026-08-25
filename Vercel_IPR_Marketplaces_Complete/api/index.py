@@ -1,5 +1,5 @@
 from flask import Flask, request, send_file, jsonify, render_template_string
-import io, re, html, os
+import io, re, html, os, json
 import openpyxl
 
 app = Flask(__name__)
@@ -123,8 +123,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
 
   <form id="unifiedForm">
-    <input type="hidden" id="marketplaceInput" name="marketplace" value="ml">
-
     <label>1. Selecciona el Marketplace a procesar:</label>
     <div class="market-tabs">
       <div class="tab-btn active" onclick="selectMarket('ml', 22, 'Mercado Libre')">🟡 Mercado Libre</div>
@@ -139,19 +137,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
       <div class="form-group">
         <label id="lblPlantilla">3. Plantilla Excel Mercado Libre (.xlsx):</label>
-        <input type="file" id="xlsxFile" name="xlsx_file" accept=".xlsx" required>
+        <input type="file" id="xlsxFile" accept=".xlsx" required>
       </div>
     </div>
 
     <div class="form-group">
       <label>Margen de Ganancia (%):</label>
-      <input type="number" id="margen" name="margen" value="22" min="0" max="200" step="0.5">
+      <input type="number" id="margen" value="22" min="0" max="200" step="0.5">
       <div class="badge-info" id="badgeMargen">Margen predeterminado: 22%</div>
     </div>
 
     <div class="form-group">
       <label>4. SKUs a procesar (uno por línea o separados por coma):</label>
-      <textarea id="skus" name="skus" placeholder="614-0109&#10;614-0108&#10;614-0107" required>614-0109
+      <textarea id="skus" placeholder="614-0109&#10;614-0108&#10;614-0107" required>614-0109
 614-0108
 614-0107</textarea>
     </div>
@@ -166,7 +164,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 let currentMarket = 'ml';
 function selectMarket(market, defaultMargin, marketName) {
   currentMarket = market;
-  document.getElementById('marketplaceInput').value = market;
   document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
   event.currentTarget.classList.add('active');
   document.getElementById('margen').value = defaultMargin;
@@ -180,20 +177,24 @@ document.getElementById('unifiedForm').addEventListener('submit', async (e) => {
   const btn = document.getElementById('btnSubmit');
   const status = document.getElementById('status');
   btn.disabled = true;
-  btn.textContent = "⏳ Extrayendo SKUs en el navegador...";
-  status.textContent = "Filtrando datos de productos seleccionados...";
+  btn.textContent = "⏳ Analizando archivo CSV localmente...";
+  status.textContent = "Extrayendo productos en el navegador...";
   status.style.color = "#38bdf8";
 
   try {
     const csvFileInput = document.getElementById('csvFile').files[0];
+    const xlsxFileInput = document.getElementById('xlsxFile').files[0];
     const skusRaw = document.getElementById('skus').value;
     const skusList = skusRaw.split(/[\\n,]+/).map(s => s.trim()).filter(Boolean);
 
+    if (!csvFileInput || !xlsxFileInput) {
+      throw new Error("Debes seleccionar ambos archivos.");
+    }
     if (skusList.length === 0) {
       throw new Error("Ingresa al menos un SKU.");
     }
 
-    // Lectura y pre-filtrado en el navegador (evita el error 413 de Vercel)
+    // Leemos el CSV en memoria del navegador
     const rawCSV = await csvFileInput.text();
     const regex = /^"\\d+/gm;
     let starts = [];
@@ -203,21 +204,24 @@ document.getElementById('unifiedForm').addEventListener('submit', async (e) => {
     }
     starts.push(rawCSV.length);
 
-    let extractedBlocks = [];
+    let parsedBlocks = [];
     for (let sku of skusList) {
       const pos = rawCSV.indexOf(sku);
       if (pos >= 0) {
         for (let i = 0; i < starts.length - 1; i++) {
           if (starts[i] <= pos && pos < starts[i+1]) {
-            extractedBlocks.push(rawCSV.substring(starts[i], starts[i+1]));
+            parsedBlocks.push({
+              sku: sku,
+              block: rawCSV.substring(starts[i], starts[i+1])
+            });
             break;
           }
         }
       }
     }
 
-    if (extractedBlocks.length === 0) {
-      throw new Error("No se encontró ninguno de los SKUs ingresados en el archivo CSV.");
+    if (parsedBlocks.length === 0) {
+      throw new Error("Ninguno de los SKUs ingresados fue encontrado en el archivo CSV.");
     }
 
     btn.textContent = "⏳ Procesando con openpyxl en Vercel...";
@@ -226,9 +230,8 @@ document.getElementById('unifiedForm').addEventListener('submit', async (e) => {
     const formData = new FormData();
     formData.append('marketplace', currentMarket);
     formData.append('margen', document.getElementById('margen').value);
-    formData.append('skus', skusRaw);
-    formData.append('xlsx_file', document.getElementById('xlsxFile').files[0]);
-    formData.append('csv_payload', extractedBlocks.join('\\n'));
+    formData.append('skus_json', JSON.stringify(parsedBlocks));
+    formData.append('xlsx_file', xlsxFileInput);
 
     const res = await fetch('/api/process', { method: 'POST', body: formData });
     if (!res.ok) {
@@ -417,30 +420,29 @@ def index():
 def process():
     try:
         marketplace = request.form.get('marketplace', 'ml')
-        skus_raw = request.form.get('skus', '')
         margen_pct = float(request.form.get('margen', 22))
         factor_margen = 1.0 + (margen_pct / 100.0)
 
-        csv_payload = request.form.get('csv_payload', '')
+        skus_json = request.form.get('skus_json', '[]')
         xlsx_file = request.files.get('xlsx_file')
 
-        if not csv_payload or not xlsx_file:
-            return jsonify({"error": "Faltan datos del producto o la plantilla Excel."}), 400
+        if not xlsx_file:
+            return jsonify({"error": "Debes adjuntar la plantilla Excel oficial."}), 400
 
-        xlsx_bytes = xlsx_file.read()
-        skus_list = [s.strip() for s in re.split(r'[\n,]+', skus_raw) if s.strip()]
+        items_raw = json.loads(skus_json)
+        if not items_raw:
+            return jsonify({"error": "No se recibieron datos de los SKUs."}), 400
 
         parsed_items = []
-        for sku in skus_list:
-            pos = csv_payload.find(sku)
-            if pos < 0: continue
+        for it in items_raw:
+            sku = it['sku']
+            block = it['block']
             
-            # Extraer bloque del payload
-            nombre = limpiar_nombre(extract_nombre(csv_payload, sku))
-            precio = extract_precio(csv_payload)
-            desc = extract_desc(csv_payload) or "Sin descripción"
-            marca_raw = extract_marca_raw(csv_payload)
-            imgs = extract_imgs(csv_payload)
+            nombre = limpiar_nombre(extract_nombre(block, sku))
+            precio = extract_precio(block)
+            desc = extract_desc(block) or "Sin descripción"
+            marca_raw = extract_marca_raw(block)
+            imgs = extract_imgs(block)
             texto = f"{nombre} {desc}"
 
             parsed_items.append({
@@ -448,7 +450,7 @@ def process():
                 "marca_raw": marca_raw, "imgs": imgs, "texto": texto
             })
 
-        wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
+        wb = openpyxl.load_workbook(io.BytesIO(xlsx_file.read()))
 
         if marketplace == "ml":
             ws = wb['Aires Acondicionados'] if 'Aires Acondicionados' in wb.sheetnames else wb.sheetnames[0]
