@@ -482,8 +482,8 @@ def process():
                             break
                 marca_fal = marca_fal or "GENERICO"
 
-                # Código universal / de barras como número entero
-                codigo_num = int(re.sub(r'\D', '', p['sku']) or "0")
+                # EAN-13 generado y convertido explícitamente a número entero (int)
+                ean13_num = int(generar_ean13(p['sku']))
 
                 vals = {
                     1: p['nombre'], 
@@ -492,7 +492,7 @@ def process():
                     4: p['desc'], 
                     5: 2376,
                     7: p['sku'], 
-                    8: codigo_num, 
+                    8: ean13_num, 
                     9: 'Sin variación', 
                     10: 19, 
                     11: 1,
@@ -508,8 +508,12 @@ def process():
                     49: 35, 
                     50: 40
                 }
-                for c, v in vals.items(): ws.cell(row=row, column=c, value=v)
-                for j, u in enumerate(p['imgs'][:8]): ws.cell(row=row, column=51 + j, value=u)
+                for c, v in vals.items():
+                    cell = ws.cell(row=row, column=c, value=v)
+                    if c == 8:
+                        cell.number_format = '0'
+                for j, u in enumerate(p['imgs'][:8]):
+                    ws.cell(row=row, column=51 + j, value=u)
                 row += 1
             out_name = "fallabela_ipr_FILTRADO_FINAL.xlsx"
 
