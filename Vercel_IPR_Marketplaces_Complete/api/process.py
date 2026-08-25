@@ -1,0 +1,442 @@
+from http.server import BaseHTTPRequestHandler
+import io, re, html, json, cgi
+import openpyxl
+
+BTU_SET = {9000, 12000, 18000, 24000, 30000, 36000, 42000, 48000, 50000, 60000}
+
+# ---------------------------------------------------------------------
+# DICCIONARIOS DE MARCAS
+# ---------------------------------------------------------------------
+MARCAS_ML = {
+    "BOSCH": "BOSCH", "CARRIER": "CARRIER", "CHEVRON": "CHEVRON", "COPELAND": "COPELAND",
+    "DAIKIN": "DAIKIN", "DANFOSS": "DANFOSS", "DUPONT": "DUPONT", "ELECTROLUX": "ELECTROLUX",
+    "EMERSON": "EMERSON", "GENERAL ELECTRIC": "GENERAL ELECTRIC", "GREE": "GREE",
+    "HACEB": "HACEB", "HISENSE": "HISENSE", "HONEYWELL": "HONEYWELL", "LG": "LG",
+    "LOCTITE": "LOCTITE", "MABE": "MABE", "MIDEA": "MIDEA", "PANASONIC": "PANASONIC",
+    "SAMSUNG": "SAMSUNG", "TRANE": "TRANE", "TYCO": "TYCO", "WEG": "WEG",
+    "WESTINGHOUSE": "WESTINGHOUSE", "WHITE RODGERS": "WHITE RODGERS", "3M": "3M"
+}
+
+MARCAS_FALABELLA = {
+    "BOSCH": "BOSCH", "CARRIER": "CARRIER", "CHEVRON": "CHEVRON", "COPELAND": "COPELAND",
+    "DAIKIN": "DAIKIN", "DANFOSS": "DANFOSS", "DUPONT": "DUPONT", "ELECTROLUX": "ELECTROLUX",
+    "EMERSON": "EMERSON", "GENERAL ELECTRIC": "GENERAL ELECTRIC", "GREE": "GENERICO",
+    "HACEB": "HACEB", "HISENSE": "HISENSE", "HONEYWELL": "HONEYWELL", "LG": "LG",
+    "LOCTITE": "LOCTITE", "MABE": "MABE", "MIDEA": "MIDEA", "PANASONIC": "PANASONIC",
+    "SAMSUNG": "SAMSUNG", "TRANE": "TRANE", "TYCO": "TYCO", "WEG": "WEG",
+    "WESTINGHOUSE": "WESTINGHOUSE", "WHITE RODGERS": "WHITE RODGERS", "3M": "3M",
+    "ABRO": "GENERICO", "AKO": "GENERICO", "ALADO": "GENERICO", "ALFA FLUX": "GENERICO",
+    "ALFA REFRIGERACION": "GENERICO", "AMUCO": "GENERICO", "ASPEN": "GENERICO", "ASPEN PUMP": "GENERICO",
+    "BALFLEX": "GENERICO", "BERNZOMATIC": "GENERICO", "BNF": "GENERICO", "BREAKERMATIC": "GENERICO",
+    "BRILLA AL-CO": "GENERICO", "BRISTOL": "GENERICO", "BUILDERS BEST": "GENERICO", "CARLYLE": "GENERICO",
+    "CELLUX": "GENERICO", "CHEMOURS": "GENERICO", "CIAC": "GENERICO", "CLEARWAY": "GENERICO",
+    "COMFORT AIR": "GENERICO", "COMFORT STAR": "GENERICO", "COMFORT STYLE": "GENERICO", "COMPELA": "GENERICO",
+    "COMPTEK": "GENERICO", "CONALCABLES": "GENERICO", "COPPER TUBE": "GENERICO", "CUBIGEL": "GENERICO",
+    "DELTA FRÃO": "GENERICO", "DELTA FRIO": "GENERICO", "DELTAFRIO": "GENERICO", "DIVERSITECH": "GENERICO",
+    "DIXELL": "GENERICO", "DORIN": "GENERICO", "DWYER": "GENERICO", "DYNAIR": "GENERICO",
+    "ELCO": "GENERICO", "ELGIN": "GENERICO", "ELITECH": "GENERICO", "EMBRACO": "GENERICO",
+    "EMICOL": "GENERICO", "ERRECOM": "GENERICO", "ESPUMLATEX": "GENERICO", "EUROPAN": "GENERICO",
+    "EVERWELL": "GENERICO", "FASCO": "GENERICO", "FIBERGLASS ISO": "GENERICO", "FSP": "GENERICO",
+    "FULL GAUGE": "GENERICO", "GBP": "GENERICO", "GENÉRICO": "GENERICO", "GENA©RICO": "GENERICO",
+    "GENPRO": "GENERICO", "GMCC": "GENERICO", "HAMMER": "GENERICO", "HARRIS": "GENERICO",
+    "HARTLAND": "GENERICO", "HUAYI": "GENERICO", "INCOPAR": "GENERICO", "INNOVACION C": "GENERICO",
+    "INTERKLIMAT": "GENERICO", "INVENSYS": "GENERICO", "INVOTECH": "GENERICO", "IPR": "GENERICO",
+    "JASON": "GENERICO", "JOHNSON CONTROLS": "GENERICO", "KINGSPAN": "GENERICO", "KLIXON": "GENERICO",
+    "KOCH GREEN": "GENERICO", "LACO": "GENERICO", "LONG TERM": "GENERICO", "MADEPREN": "GENERICO",
+    "MANEUROP": "GENERICO", "MARS": "GENERICO", "MASTERCOOL": "GENERICO", "MAXPURE": "GENERICO",
+    "MCQUAY": "GENERICO", "MINEROIL": "GENERICO", "MIPAL": "GENERICO", "MIRAGE": "GENERICO",
+    "NACOBRE": "GENERICO", "NINGBO": "GENERICO", "ORANGE": "GENERICO", "PARAGON": "GENERICO",
+    "PEGAUCHO": "GENERICO", "PENN": "GENERICO", "POLYKEN": "GENERICO", "POLYLON": "GENERICO",
+    "RANCO": "GENERICO", "READY": "GENERICO", "REFRIANDINOS": "GENERICO", "RIFENG": "GENERICO",
+    "ROBERTSHAW": "GENERICO", "ROWA": "GENERICO", "ROYALSTAR": "GENERICO", "SANHUA": "GENERICO",
+    "SICCOM": "GENERICO", "SINTECO": "GENERICO", "SMART ELECTRIC": "GENERICO", "SMART PUMP": "GENERICO",
+    "SOLER Y PALAU": "GENERICO", "SUMOIL": "GENERICO", "SUPCO": "GENERICO", "TECAM": "GENERICO",
+    "TECLAB": "GENERICO", "TECNOWELD": "GENERICO", "TECUMSEH": "GENERICO", "THERMO-COIL": "GENERICO",
+    "TIANYICOOL": "GENERICO", "TOP TECH": "GENERICO", "TOPFLO": "GENERICO", "TRADEPRO": "GENERICO",
+    "UNCO": "GENERICO", "UNIWELD": "GENERICO", "US MOTORS": "GENERICO", "WAGNER": "GENERICO",
+    "YETI": "GENERICO", "ZERO": "GENERICO", "ZIEHL-ABEGG": "GENERICO", "ZI ZHENG LAN": "GENERICO"
+}
+
+MARCAS_EXITO = {
+    "BOSCH": "BOSCH", "CARRIER": "CARRIER", "CHEVRON": "CHEVRON", "COPELAND": "COPELAND",
+    "DAIKIN": "DAIKIN", "DANFOSS": "DANFOSS", "DUPONT": "DUPONT", "ELECTROLUX": "ELECTROLUX",
+    "EMERSON": "EMERSON", "GENERAL ELECTRIC": "GENERAL ELECTRIC", "GREE": "GREE",
+    "HACEB": "HACEB", "HISENSE": "HISENSE", "HONEYWELL": "HONEYWELL", "LG": "LG",
+    "LOCTITE": "LOCTITE", "MABE": "MABE", "MIDEA": "MIDEA", "PANASONIC": "PANASONIC",
+    "SAMSUNG": "SAMSUNG", "TRANE": "TRANE", "TYCO": "TYCO", "WEG": "WEG",
+    "WESTINGHOUSE": "WESTINGHOUSE", "WHITE RODGERS": "WHITE RODGERS", "3M": "3M"
+}
+
+# ---------------------------------------------------------------------
+# FUNCIONES DE PARSEO GENERAL
+# ---------------------------------------------------------------------
+def extract_id(block):
+    m = re.match(r'"(\d+),simple,', block)
+    return int(m.group(1)) if m else None
+
+def extract_precio(block):
+    rid = extract_id(block)
+    cand = []
+    for n in re.findall(r'\d{5,8}', block):
+        v = int(n)
+        if v in BTU_SET or 1900 <= v <= 2099 or (rid is not None and v == rid):
+            continue
+        cand.append(v)
+    if cand: return max(cand)
+    m = re.search(r'(\d+),producto/', block)
+    if m: return int(m.group(1))
+    m = re.search(r'(\d+),""Refrigeraci', block)
+    if m: return int(m.group(1))
+    return 0
+
+def extract_nombre(block, sku):
+    m = re.search(r'simple,' + re.escape(sku) + r',,""([^"](?:[^"]|"")*?)"",', block)
+    return m.group(1).replace('""', '"') if m else ""
+
+def limpiar_nombre(n):
+    n = re.sub(r'[^\w\s]', ' ', n, flags=re.UNICODE).replace('_', ' ')
+    return re.sub(r'\s+', ' ', n).strip()
+
+def extract_desc(block):
+    m = re.search(r'visible,(.*?)(?:,,,taxable|,producto/|,""Refrigeraci|,,,\d{4,8},|$)', block, re.S)
+    region = m.group(1) if m else ''
+    prev = ""
+    while prev != region:
+        prev = region
+        region = html.unescape(region)
+    region = region.replace('\n', ' ').replace('
+', ' ').replace('', ' ').replace('	', ' ')
+    region = re.sub(r'<(script|style)[^>]*>.*?</>', ' ', region, flags=re.I | re.S)
+    region = re.sub(r'<[^>]+>', ' ', region)
+    text = region.replace('""', '"').replace('"', ' ')
+    text = re.sub(r'[;\s]+', ' ', text).strip()
+    text = re.sub(r'^[A-Z0-9/.\-]+\s*,\s*', '', text)
+    return re.sub(r'^[^\w]+', '', text).strip()
+
+def extract_marca_raw(block):
+    m = re.search(r'producto/[^,]*,\s*([^,]+),', block)
+    if m and m.group(1).strip().lower() not in ('1','0','none',''):
+        return m.group(1).strip()
+    m2 = re.search(r'"Refrigeraci.*?"",""([^"]+)"",', block)
+    if m2:
+        return m2.group(1).strip()
+    return ""
+
+def extract_imgs(block):
+    u = re.findall(r'https?://[^\s"<>,]+\.(?:jpg|jpeg|png|gif|webp)', block, re.I)
+    seen = []
+    for x in u:
+        if x not in seen: seen.append(x)
+    return seen
+
+def generar_ean13(sku):
+    digits = re.sub(r'\D', '', str(sku))
+    base12 = f"770{digits.zfill(9)}"[-12:]
+    s = sum(int(d) * (1 if i % 2 == 0 else 3) for i, d in enumerate(base12))
+    check_digit = (10 - (s % 10)) % 10
+    return base12 + str(check_digit)
+
+# ---------------------------------------------------------------------
+# DEDUCCIONES MERCADO LIBRE
+# ---------------------------------------------------------------------
+def deducir_capacidad_ml(text):
+    m = re.search(r'(\d{1,2}(?:[\.,]\d{3})?|\d{4,5})\s*BTU', text, re.I)
+    if m:
+        num = int(re.sub(r'\D', '', m.group(1)))
+        valid_btus = [5000, 9000, 11000, 12000, 14000, 17000, 18000, 22000, 24000, 30000, 36000, 48000, 60000]
+        return min(valid_btus, key=lambda x: abs(x - num))
+    return 9000
+
+def deducir_voltaje_ml(text):
+    m = re.search(r'(\d{3})\s*V', text, re.I)
+    if m:
+        v = int(m.group(1))
+        if v in [110, 115, 120, 220, 230, 240]:
+            return "110V" if v < 130 else "220V"
+    return "220V"
+
+def deducir_tipo_alimentacion(text):
+    if re.search(r'trif[aá]sico|380\s*v|440\s*v|460\s*v|480\s*v|industrial', text, re.I):
+        return "Energía industrial"
+    return "Corriente doméstica"
+
+def deducir_refrigerante_ml(text):
+    for r in ['R-410A', 'R-32', 'R-22', 'R134', 'R600A']:
+        if re.search(r'' + re.escape(r) + r'', text, re.I): return r
+    return "R-410A"
+
+def deducir_climatizacion(text):
+    return "Frío/Calor" if re.search(r'calor|calefacci[oó]n', text, re.I) else "Frío"
+
+def deducir_tipo_aire(text):
+    if re.search(r'portatil|portátil', text, re.I): return "Portátil"
+    if re.search(r'ventana', text, re.I): return "Ventana"
+    return "Split"
+
+# ---------------------------------------------------------------------
+# DEDUCCIONES FALABELLA
+# ---------------------------------------------------------------------
+def deducir_capacidad_falabella(t):
+    m = re.search(r'(\d[\d .]{2,6})\s*BTU', t, re.I)
+    if m: return (re.sub(r'\D', '', m.group(1)) + ' BTU').strip()
+    m = re.search(r'(\d{1,2})\s*K', t)
+    if m: return m.group(0).strip()
+    m = re.search(r'(\d+(?:\.\d+)?)\s*HP', t, re.I)
+    if m: return m.group(0).strip()
+    return ''
+
+def deducir_tension_falabella(t):
+    m = re.search(r'(\d{3})\s*V', t, re.I)
+    return m.group(1) if m else ''
+
+# ---------------------------------------------------------------------
+# DEDUCCIONES ÉXITO
+# ---------------------------------------------------------------------
+def deducir_capacidad_exito(text):
+    m = re.search(r'(\d{1,2}(?:[\.,]\d{3})?|\d{4,5})\s*BTU', text, re.I)
+    if m:
+        num = int(re.sub(r'\D', '', m.group(1)))
+        valid_btus = [5000, 9000, 11000, 12000, 14000, 17000, 18000, 22000, 24000]
+        closest = min(valid_btus, key=lambda x: abs(x - num))
+        return f"{closest} Btu"
+    return "9000 Btu"
+
+def deducir_voltaje_exito(text):
+    m = re.search(r'(\d{3})\s*V', text, re.I)
+    if m:
+        v = int(m.group(1))
+        if v in [110, 115, 120, 220, 230, 240]:
+            return f"{v} V"
+    return "220 V"
+
+def deducir_refrigerante_exito(text):
+    for r in ['R-410A', 'R-32', 'R-22', 'R134', 'R600A']:
+        if re.search(r'' + re.escape(r) + r'', text, re.I):
+            return r
+    return "Otro"
+
+def deducir_tecnologia_exito(text):
+    if re.search(r'dual\s+inverter', text, re.I): return "Dual Inverter"
+    if re.search(r'inverter', text, re.I): return "Inverter"
+    return "Convencional"
+
+# ---------------------------------------------------------------------
+# PROCESAMIENTOS 100% IDÉNTICOS A LOS COLABS
+# ---------------------------------------------------------------------
+def procesar_ml(wb, items, factor_margen):
+    ws = wb['Aires Acondicionados'] if 'Aires Acondicionados' in wb.sheetnames else wb.sheetnames[0]
+    for r in range(ws.max_row, 8, -1):
+        ws.delete_rows(r)
+    row = 9
+    for p in items:
+        precio_final = round(p['precio'] * factor_margen)
+        marca = MARCAS_ML.get(p['marca_raw'].upper().strip(), "Genérica")
+        ean13 = generar_ean13(p['sku'])
+        tipo_aire = deducir_tipo_aire(p['texto'])
+        inverter = "Sí" if "inverter" in p['texto'].lower() else "No"
+        wifi = "Sí" if "wifi" in p['texto'].lower() or "wi-fi" in p['texto'].lower() else "No"
+
+        row_data = {
+            2: p['nombre'][:60],
+            4: "Nuevo",
+            5: ean13,
+            6: "Blanco",
+            7: deducir_voltaje_ml(p['texto']),
+            8: deducir_voltaje_ml(p['texto']),
+            9: ",".join(p['imgs'][:10]),
+            10: p['sku'],
+            11: 1,
+            12: precio_final,
+            13: p['desc'],
+            15: "Cuotas",
+            16: "Sin costo",
+            17: "Mercado Envíos",
+            18: "A cargo del comprador",
+            19: "Acepto",
+            20: "Garantía del vendedor",
+            21: 12,
+            22: "meses",
+            23: marca,
+            24: p['sku'],
+            25: deducir_tipo_alimentacion(p['texto']),
+            26: tipo_aire,
+            28: deducir_climatizacion(p['texto']),
+            29: "De pared" if tipo_aire == "Split" else "",
+            34: "Sí",
+            35: deducir_capacidad_ml(p['texto']),
+            36: "BTU",
+            37: wifi,
+            38: "Sí",
+            39: "Sí",
+            40: deducir_refrigerante_ml(p['texto']),
+            41: inverter
+        }
+        for c, val in row_data.items():
+            ws.cell(row=row, column=c, value=val)
+        row += 1
+
+def procesar_falabella(wb, items, factor_margen):
+    ws = wb['Subir plantilla'] if 'Subir plantilla' in wb.sheetnames else wb.sheetnames[0]
+    for r in range(ws.max_row, 4, -1):
+        ws.delete_rows(r)
+    row = 5
+    for p in items:
+        precio_final = round(p['precio'] * factor_margen)
+        marca = MARCAS_FALABELLA.get(p['marca_raw'].upper().strip(), "GENERICO")
+        
+        vals = {
+            1: p['nombre'], 2: marca, 3: p['nombre'], 4: p['desc'], 5: 2376,
+            7: p['sku'], 8: p['sku'].replace('-', ''), 9: 'Sin variación', 10: 19, 11: 1,
+            12: precio_final, 16: deducir_tension_falabella(p['texto']), 17: deducir_capacidad_falabella(p['texto']),
+            18: 0, 19: 0, 20: 'Unidad', 41: 'Nuevo',
+            47: 100, 48: 40, 49: 35, 50: 40
+        }
+        for c, v in vals.items():
+            ws.cell(row=row, column=c, value=v)
+        for j, u in enumerate(p['imgs'][:8]):
+            ws.cell(row=row, column=51 + j, value=u)
+        row += 1
+
+def procesar_exito(wb, items, factor_margen):
+    ws = wb['Aires Acondicionados'] if 'Aires Acondicionados' in wb.sheetnames else wb.sheetnames[0]
+    for r in range(ws.max_row, 3, -1):
+        ws.delete_rows(r)
+    row = 4
+    for p in items:
+        marca = MARCAS_EXITO.get(p['marca_raw'].upper().strip(), "GENERICO")
+        imgs = p['imgs']
+        row_data = {
+            1: "",
+            2: p['sku'].replace('-', ''),
+            3: p['nombre'][:120],
+            4: "27432_Aires Acondicionados",
+            5: marca,
+            6: p['desc'],
+            7: f"{marca}, {p['sku']}, Aire Acondicionado, Refrigeracion",
+            8: 35,
+            9: 100,
+            10: 40,
+            11: 40,
+            12: 3,
+            13: 35,
+            14: 100,
+            15: 40,
+            16: 40,
+            17: "Unidad",
+            18: 1,
+            19: "Technology",
+            20: imgs[0] if len(imgs) > 0 else "N/A",
+            21: imgs[1] if len(imgs) > 1 else "",
+            22: imgs[2] if len(imgs) > 2 else "",
+            23: imgs[3] if len(imgs) > 3 else "",
+            24: imgs[4] if len(imgs) > 4 else "",
+            25: "",
+            26: 0,
+            27: "N/A",
+            28: "N/A",
+            29: "Sin advertencias específicas",
+            30: deducir_tipo_aire(p['texto']),
+            31: deducir_capacidad_exito(p['texto']),
+            32: deducir_voltaje_exito(p['texto']),
+            33: deducir_refrigerante_exito(p['texto']),
+            34: "N/A",
+            35: "Control remoto, Manual de usuario",
+            36: "N/A",
+            37: deducir_tecnologia_exito(p['texto']),
+            38: "No Aplica"
+        }
+        for c, val in row_data.items():
+            ws.cell(row=row, column=c, value=val)
+        row += 1
+
+# ---------------------------------------------------------------------
+# HANDLER VERCEL (HTTP POST)
+# ---------------------------------------------------------------------
+class handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        ctype, pdict = cgi.parse_header(self.headers.get('content-type'))
+        if ctype != 'multipart/form-data':
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(b"Expected multipart/form-data")
+            return
+            
+        pdict['boundary'] = bytes(pdict['boundary'], "utf-8")
+        pdict['CONTENT-LENGTH'] = int(self.headers.get('content-length'))
+        fields = cgi.parse_multipart(self.rfile, pdict)
+        
+        try:
+            marketplace = fields.get('marketplace', ['ml'])[0]
+            if isinstance(marketplace, bytes): marketplace = marketplace.decode('utf-8')
+            
+            csv_content = fields.get('csv_file')[0]
+            xlsx_content = fields.get('xlsx_file')[0]
+            skus_raw = fields.get('skus')[0].decode('utf-8') if isinstance(fields.get('skus')[0], bytes) else fields.get('skus')[0]
+            margen_pct = float(fields.get('margen', [22])[0])
+            factor_margen = 1.0 + (margen_pct / 100.0)
+            
+            raw = csv_content.decode("utf-8-sig", errors="replace") if isinstance(csv_content, bytes) else str(csv_content)
+            starts = [m.start() for m in re.finditer(r'(?m)^"\d+', raw)]
+            starts.append(len(raw))
+            
+            def get_block(sku):
+                pos = raw.find(sku)
+                if pos < 0: return None
+                for i, st in enumerate(starts[:-1]):
+                    if st <= pos < starts[i+1]:
+                        return raw[st:starts[i+1]]
+                return None
+                
+            skus_list = [s.strip() for s in re.split(r'[\n,]+', skus_raw) if s.strip()]
+            
+            parsed_items = []
+            for sku in skus_list:
+                b = get_block(sku)
+                if not b: continue
+                nombre = limpiar_nombre(extract_nombre(b, sku))
+                precio = extract_precio(b)
+                desc = extract_desc(b) or "Sin descripción"
+                marca_raw = extract_marca_raw(b)
+                imgs = extract_imgs(b)
+                texto = f"{nombre} {desc}"
+                
+                parsed_items.append({
+                    "sku": sku,
+                    "nombre": nombre,
+                    "precio": precio,
+                    "desc": desc,
+                    "marca_raw": marca_raw,
+                    "imgs": imgs,
+                    "texto": texto
+                })
+                
+            wb = openpyxl.load_workbook(io.BytesIO(xlsx_content))
+            
+            if marketplace == "ml":
+                procesar_ml(wb, parsed_items, factor_margen)
+                out_name = "mercadolibre_ipr_FILTRADO_FINAL.xlsx"
+            elif marketplace == "falabella":
+                procesar_falabella(wb, parsed_items, factor_margen)
+                out_name = "fallabela_ipr_FILTRADO_FINAL.xlsx"
+            elif marketplace == "exito":
+                procesar_exito(wb, parsed_items, factor_margen)
+                out_name = "exito_ipr_FILTRADO_FINAL_ESTANDARIZADO.xlsx"
+            else:
+                raise ValueError("Marketplace no soportado")
+                
+            out_buf = io.BytesIO()
+            wb.save(out_buf)
+            out_data = out_buf.getvalue()
+            
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            self.send_header('Content-Disposition', f'attachment; filename="{out_name}"')
+            self.send_header('Content-Length', str(len(out_data)))
+            self.end_headers()
+            self.wfile.write(out_data)
+            
+        except Exception as e:
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
