@@ -441,7 +441,6 @@ def process():
             for p in parsed_items:
                 precio_final = round(p['precio'] * factor_margen)
                 
-                # Rescate de marca para ML
                 marca_ml = MARCAS_ML.get(p['marca_raw'].upper().strip())
                 if not marca_ml:
                     for km in MARCAS_ML.keys():
@@ -475,7 +474,6 @@ def process():
             for p in parsed_items:
                 precio_final = round(p['precio'] * factor_margen)
                 
-                # Rescate de marca para Falabella
                 marca_fal = MARCAS_FALABELLA.get(p['marca_raw'].upper().strip())
                 if not marca_fal:
                     for km in MARCAS_FALABELLA.keys():
@@ -484,6 +482,9 @@ def process():
                             break
                 marca_fal = marca_fal or "GENERICO"
 
+                # Código universal / de barras como número entero
+                codigo_num = int(re.sub(r'\D', '', p['sku']) or "0")
+
                 vals = {
                     1: p['nombre'], 
                     2: marca_fal, 
@@ -491,15 +492,15 @@ def process():
                     4: p['desc'], 
                     5: 2376,
                     7: p['sku'], 
-                    8: generar_ean13(p['sku']), 
+                    8: codigo_num, 
                     9: 'Sin variación', 
                     10: 19, 
                     11: 1,
                     12: precio_final, 
                     16: deducir_tension_falabella(p['texto']), 
                     17: deducir_capacidad_falabella(p['texto']),
-                    18: 1, 
-                    19: 1, 
+                    18: 0, 
+                    19: 0, 
                     20: 'Unidad', 
                     41: 'Nuevo', 
                     47: 100, 
